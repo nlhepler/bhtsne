@@ -38,8 +38,30 @@
 extern "C" {
 namespace TSNE {
 #endif
-    void run(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta, int rand_seed,
-             bool skip_random_init, int max_iter, int stop_lying_iter, int mom_switch_iter);
+    struct TSNE {
+        // parameters
+        int N;
+        double* Y;
+        int no_dims;
+        int max_iter;
+        double theta;
+        int stop_lying_iter;
+        int mom_switch_iter;
+        // state
+        double* P;
+        unsigned int* row_P;
+        unsigned int* col_P;
+        double* val_P;
+        double* dY;
+        double* uY;
+        double* gains;
+        int iter;
+        float start_time;
+        float total_time;
+    };
+    void init_tsne(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta, int rand_seed,
+                   bool skip_random_init, int max_iter, int stop_lying_iter, int mom_switch_iter, struct TSNE* tsne);
+    bool run_n(int n, struct TSNE* tsne);
     bool load_data(double** data, int* n, int* d, int* no_dims, double* theta, double* perplexity, int* rand_seed, int* max_iter);
     void save_data(double* data, int* landmarks, double* costs, int n, int d);
 #ifdef __cplusplus

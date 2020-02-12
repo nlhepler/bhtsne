@@ -57,8 +57,26 @@ static void computeSquaredEuclideanDistance(double* X, int N, int D, double* DD)
 static void symmetrizeMatrix(unsigned int** row_P, unsigned int** col_P, double** val_P, int N);
 
 // Perform t-SNE
-void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta, int rand_seed,
-               bool skip_random_init, int max_iter, int stop_lying_iter, int mom_switch_iter) {
+void TSNE::init_tsne(double* X, int N, int D, double* Y, int no_dims, double perplexity, double theta, int rand_seed,
+                     bool skip_random_init, int max_iter, int stop_lying_iter, int mom_switch_iter, struct TSNE* tsne) {
+    // init tsne settings
+    tsne->N               = N;
+    tsne->Y               = Y;
+    tsne->no_dims         = no_dims;
+    tsne->theta           = theta;
+    tsne->max_iter        = max_iter;
+    tsne->stop_lying_iter = stop_lying_iter;
+    tsne->mom_switch_iter = mom_switch_iter;
+    // init tsne state
+    tsne->P               = NULL;
+    tsne->row_P           = NULL;
+    tsne->col_P           = NULL;
+    tsne->val_P           = NULL;
+    tsne->dY              = NULL;
+    tsne->uY              = NULL;
+    tsne->gains           = NULL;
+    tsne->iter            = 0;
+    tsne->total_time      = .0;
 
     // Set random seed
     if (skip_random_init != true) {
@@ -76,16 +94,15 @@ void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexit
     printf("Using no_dims = %d, perplexity = %f, and theta = %f\n", no_dims, perplexity, theta);
     bool exact = (theta == .0) ? true : false;
 
-    // Set learning parameters
-    float total_time = .0;
     clock_t start, end;
-	double momentum = .5, final_momentum = .8;
-	double eta = 200.0;
 
     // Allocate some memory
-    double* dY    = (double*) malloc(N * no_dims * sizeof(double));
-    double* uY    = (double*) malloc(N * no_dims * sizeof(double));
-    double* gains = (double*) malloc(N * no_dims * sizeof(double));
+    tsne->dY    = (double*) malloc(N * no_dims * sizeof(double));
+    tsne->uY    = (double*) malloc(N * no_dims * sizeof(double));
+    tsne->gains = (double*) malloc(N * no_dims * sizeof(double));
+    double* dY = tsne->dY;
+    double* uY = tsne->uY;
+    double* gains = tsne->gains;
     if(dY == NULL || uY == NULL || gains == NULL) { printf("Memory allocation failed!\n"); exit(1); }
     for(int i = 0; i < N * no_dims; i++)    uY[i] =  .0;
     for(int i = 0; i < N * no_dims; i++) gains[i] = 1.0;
@@ -106,7 +123,8 @@ void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexit
 
         // Compute similarities
         printf("Exact?");
-        P = (double*) malloc(N * N * sizeof(double));
+        tsne->P = (double*) malloc(N * N * sizeof(double));
+        double* P = tsne->P;
         if(P == NULL) { printf("Memory allocation failed!\n"); exit(1); }
         computeGaussianPerplexity(X, N, D, P, perplexity);
 
@@ -131,10 +149,13 @@ void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexit
     else {
 
         // Compute asymmetric pairwise input similarities
-        computeGaussianPerplexity(X, N, D, &row_P, &col_P, &val_P, perplexity, (int) (3 * perplexity));
+        computeGaussianPerplexity(X, N, D, &tsne->row_P, &tsne->col_P, &tsne->val_P, perplexity, (int) (3 * perplexity));
 
         // Symmetrize input similarities
-        symmetrizeMatrix(&row_P, &col_P, &val_P, N);
+        symmetrizeMatrix(&tsne->row_P, &tsne->col_P, &tsne->val_P, N);
+        row_P = tsne->row_P;
+        col_P = tsne->col_P;
+        val_P = tsne->val_P;
         double sum_P = .0;
         for(int i = 0; i < row_P[N]; i++) sum_P += val_P[i];
         for(int i = 0; i < row_P[N]; i++) val_P[i] /= sum_P;
@@ -151,15 +172,37 @@ void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexit
   }
 
 	// Perform main training loop
-    if(exact) printf("Input similarities computed in %4.2f seconds!\nLearning embedding...\n", (float) (end - start) / CLOCKS_PER_SEC);
-    else printf("Input similarities computed in %4.2f seconds (sparsity = %f)!\nLearning embedding...\n", (float) (end - start) / CLOCKS_PER_SEC, (double) row_P[N] / ((double) N * (double) N));
-    start = clock();
+    if(exact) printf("Input similarities computed in %4.2f seconds!\n", (float) (end - start) / CLOCKS_PER_SEC);
+    else      printf("Input similarities computed in %4.2f seconds (sparsity = %f)!\n", (float) (end - start) / CLOCKS_PER_SEC, (double) row_P[N] / ((double) N * (double) N));
+}
 
-	for(int iter = 0; iter < max_iter; iter++) {
+bool TSNE::run_n(int n, struct TSNE* tsne) {
+    clock_t end;
+
+    // if we've just begun, initialize the clock
+    if (tsne->iter == 0) tsne->start_time = clock();
+
+    int N = tsne->N;
+    double* Y = tsne->Y;
+    int no_dims = tsne->no_dims;
+    double* P = tsne->P;
+    unsigned int* row_P = tsne->row_P;
+    unsigned int* col_P = tsne->col_P;
+    double* val_P = tsne->val_P;
+    double* dY = tsne->dY;
+    double* uY = tsne->uY;
+    double* gains = tsne->gains;
+    bool exact = (tsne->theta == .0) ? true : false;
+    int max_iter = std::min(tsne->iter + n, tsne->max_iter);
+
+    // Set learning parameters
+	double momentum = .5, final_momentum = .8;
+	double eta = 200.0;
+	for(; tsne->iter < max_iter; tsne->iter++) {
 
         // Compute (approximate) gradient
         if(exact) computeExactGradient(P, Y, N, no_dims, dY);
-        else computeGradient(row_P, col_P, val_P, Y, N, no_dims, dY, theta);
+        else computeGradient(row_P, col_P, val_P, Y, N, no_dims, dY, tsne->theta);
 
         // Update gains
         for(int i = 0; i < N * no_dims; i++) gains[i] = (sign(dY[i]) != sign(uY[i])) ? (gains[i] + .2) : (gains[i] * .8);
@@ -173,40 +216,45 @@ void TSNE::run(double* X, int N, int D, double* Y, int no_dims, double perplexit
 		zeroMean(Y, N, no_dims);
 
         // Stop lying about the P-values after a while, and switch momentum
-        if(iter == stop_lying_iter) {
+        if(tsne->iter == tsne->stop_lying_iter) {
             if(exact) { for(int i = 0; i < N * N; i++)        P[i] /= 12.0; }
             else      { for(int i = 0; i < row_P[N]; i++) val_P[i] /= 12.0; }
         }
-        if(iter == mom_switch_iter) momentum = final_momentum;
+        if(tsne->iter == tsne->mom_switch_iter) momentum = final_momentum;
 
         // Print out progress
-        if (iter > 0 && (iter % 50 == 0 || iter == max_iter - 1)) {
+        if (tsne->iter > 0 && (tsne->iter % 50 == 0 || tsne->iter == tsne->max_iter - 1)) {
             end = clock();
             double C = .0;
             if(exact) C = evaluateError(P, Y, N, no_dims);
-            else      C = evaluateError(row_P, col_P, val_P, Y, N, no_dims, theta);  // doing approximate computation here!
-            if(iter == 0)
-                printf("Iteration %d: error is %f\n", iter + 1, C);
+            else      C = evaluateError(row_P, col_P, val_P, Y, N, no_dims, tsne->theta);  // doing approximate computation here!
+            if(tsne->iter == 0)
+                printf("Iteration %d: error is %f\n", tsne->iter + 1, C);
             else {
-                total_time += (float) (end - start) / CLOCKS_PER_SEC;
-                printf("Iteration %d: error is %f (50 iterations in %4.2f seconds)\n", iter, C, (float) (end - start) / CLOCKS_PER_SEC);
+                tsne->total_time += (float) (end - tsne->start_time) / CLOCKS_PER_SEC;
+                printf("Iteration %d: error is %f (50 iterations in %4.2f seconds)\n", tsne->iter, C, (float) (end - tsne->start_time) / CLOCKS_PER_SEC);
             }
-			start = clock();
+			tsne->start_time = clock();
         }
     }
-    end = clock(); total_time += (float) (end - start) / CLOCKS_PER_SEC;
+    end = clock(); tsne->total_time += (float) (end - tsne->start_time) / CLOCKS_PER_SEC;
+
+    // we're not done yet
+    if (tsne->iter < tsne->max_iter) return false;
 
     // Clean up memory
-    free(dY);
-    free(uY);
-    free(gains);
-    if(exact) free(P);
+    free(tsne->dY);
+    free(tsne->uY);
+    free(tsne->gains);
+    if(exact) free(tsne->P);
     else {
-        free(row_P); row_P = NULL;
-        free(col_P); col_P = NULL;
-        free(val_P); val_P = NULL;
+        free(tsne->row_P); tsne->row_P = NULL;
+        free(tsne->col_P); tsne->col_P = NULL;
+        free(tsne->val_P); tsne->val_P = NULL;
     }
-    printf("Fitting performed in %4.2f seconds.\n", total_time);
+    printf("Fitting performed in %4.2f seconds.\n", tsne->total_time);
+
+    return true;
 }
 
 
