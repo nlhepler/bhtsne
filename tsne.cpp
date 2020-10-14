@@ -79,6 +79,8 @@ void TSNE::init_tsne(double* X, int N, int D, double* Y, int no_dims, double per
     tsne->iter            = 0;
     tsne->total_time      = .0;
 
+    if (tsne->no_dims > 3) { printf("Cannot embed in >3 dimensions!\n"); exit(1); }
+
     // Set random seed
     if (skip_random_init != true) {
       if(rand_seed >= 0) {

@@ -42,22 +42,12 @@
 // Constructs cell
 Cell::Cell(unsigned int inp_dimension) {
     dimension = inp_dimension;
-    corner = (double*) malloc(dimension * sizeof(double));
-    width  = (double*) malloc(dimension * sizeof(double));
 }
 
 Cell::Cell(unsigned int inp_dimension, double* inp_corner, double* inp_width) {
     dimension = inp_dimension;
-    corner = (double*) malloc(dimension * sizeof(double));
-    width  = (double*) malloc(dimension * sizeof(double));
     for(int d = 0; d < dimension; d++) setCorner(d, inp_corner[d]);
     for(int d = 0; d < dimension; d++) setWidth( d,  inp_width[d]);
-}
-
-// Destructs cell
-Cell::~Cell() {
-    free(corner);
-    free(width);
 }
 
 double Cell::getCorner(unsigned int d) {
