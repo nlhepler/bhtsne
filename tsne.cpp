@@ -40,7 +40,7 @@
 #include "sptree.h"
 #include "tsne.h"
 
-#define printf(...) fprintf(stderr, __VA_ARGS__)
+#define printf(...) fprintf(stderr, "INFO bhtsne - " __VA_ARGS__)
 
 using namespace std;
 
